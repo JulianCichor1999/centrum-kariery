@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Centrum Dowodzenia — Kariera · DEMO</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="model.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<div id="app">
+  <a class="skip" href="#main">Przejdź do treści</a>
+  <div class="demo-banner"><span class="cd-demo">DEMO</span><span>Przykładowe oferty i firmy. Zmiany znikają po odświeżeniu. Nie wpisuj poufnych danych.</span></div>
+  <div class="cd-shell">
+    <aside class="cd-sidebar" id="sidebar">
+      <div class="cd-brand"><div class="cd-monogram" aria-hidden="true">JC</div><div><strong>Centrum Dowodzenia</strong><span>Kariera Juliana</span></div></div>
+      <nav class="cd-nav" aria-label="Moduły">
+        <button type="button" data-screen="today" aria-current="page">Dzisiaj</button>
+        <button type="button" data-screen="offers">Oferty</button>
+        <button type="button" data-screen="applications">Aplikacje</button>
+        <button type="button" data-screen="plan">Plan</button>
+        <button type="button" data-screen="profile">Mój profil</button>
+        <button type="button" data-screen="materials">Materiały</button>
+      </nav>
+      <div class="cd-side-end"><nav class="cd-nav" aria-label="Asystent i ustawienia"><button type="button" data-screen="assistant">CV MASTER AI</button><button type="button" data-screen="settings">Ustawienia</button></nav><div class="cd-person cd-small"><strong>Tryb demonstracyjny</strong><p class="cd-muted">Jeden użytkownik · 0 zł</p></div></div>
+    </aside>
+    <div class="cd-workspace">
+      <header class="cd-topbar">
+        <button class="cd-button cd-menu" type="button" id="menu" aria-expanded="false" aria-controls="sidebar">Menu</button>
+        <form class="cd-search" id="search-form" role="search"><label class="sr-only" for="search">Szukaj ofert, aplikacji, zadań, notatek i materiałów</label><input id="search" type="search" placeholder="Szukaj w Centrum Dowodzenia…" maxlength="200"><button class="cd-button" type="submit">Szukaj</button></form>
+        <button class="cd-button cd-primary" type="button" data-action="add-offer">Dodaj ofertę</button>
+      </header>
+      <p id="notice" class="toast" role="status" aria-live="polite" hidden></p>
+      <main class="cd-main" id="main" tabindex="-1"></main>
+    </div>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-body"></div></dialog>
+</div>
+</body>
+</html>
