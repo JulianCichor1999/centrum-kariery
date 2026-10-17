@@ -1,0 +1,72 @@
+// Actual frontend functions and data adapter, with simulated responses; no browser control.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ROOT=path.resolve(__dirname,'../..'),source=fs.readFileSync(path.join(ROOT,'app/static/app.js'),'utf8'),checks=[];
+const check=(name,ok)=>{assert.ok(ok,name);checks.push(name);};
+const helpers=source.split('\n').filter(x=>/^\s*const (esc|button|field|select|options) =/.test(x)).join('\n');
+const section=source.slice(source.indexOf('  function driveGuide() {'),source.indexOf('  function settingsView() {'));
+let dialog,previewCalls=0,commitCalls=0,bulkCalls=0;
+const context={driveStatus:null,document:{getElementById:()=>({textContent:''})},M:{ValidationError:class extends Error{}},URL,File,showDialog:(title,fields,label,callback)=>{dialog={title,fields,label,callback};},closeDialog:()=>{},render:()=>{},navigate:()=>{},announce:()=>{},store:{state:{materials:[]},drivePreviewAll:async()=>{bulkCalls++;return {wholeFolder:true,filesFound:2,foldersScanned:3,items:[{title:'<script>doc</script>',kind:'Portfolio',size:10,path:'<img src=x>',readable:true},{title:'DEMO.mp3',kind:'Portfolio',size:20,path:'DEMO',readable:false}],skipped:[{name:'<script>skip</script>',reason:'<img src=x>'}],warnings:['<script>warning</script>'],token:'BULK-DEMO',revision:1};},drivePreview:async x=>{previewCalls++;return {items:x.map(y=>({title:'DEMO',kind:y.kind,version:'Drive-demo',size:1})),skipped:[],token:'DEMO',revision:1};},driveCommit:async()=>{commitCalls++;return ['DEMO'];},driveFiles:async()=>({folder:{name:'Folder DEMO'},items:[{id:'file_demo_123',name:'CV DEMO.txt',reason:''}]}),driveConnect:async()=>({url:'https://accounts.google.com/o/oauth2/v2/auth?client_id=DEMO'}),driveStatus:async()=>({authorized:false,pending:true})}};
+vm.createContext(context); vm.runInContext(helpers+'\n'+section,context);
+check('Niepołączony widok nie oferuje importu',!context.driveView().includes('data-action="drive-import"'));
+check('Instrukcja wskazuje klienta Desktop i testowego użytkownika',context.driveGuide().includes('Desktop app')&&context.driveGuide().includes('użytkownika testowego'));
+check('Zakres całego Dysku jest jawny',context.driveView().includes('odczytu całego Dysku'));
+context.driveStatus={configured:true,authorized:true,folder:{id:'folder_demo_123',name:'<script>bad()</script>'}};
+let html=context.driveView();
+check('Po konfiguracji dostępne są folder, import i odłączenie',['drive-folder','drive-import','drive-disconnect'].every(x=>html.includes('data-action="'+x+'"')));
+check('Całe portfolio ma osobny przycisk importu',html.includes('Wczytaj całe Portfolio')&&html.includes('data-action="drive-import-all"'));
+check('Nazwa folderu jest escapowana',html.includes('&lt;script&gt;')&&!html.includes('<script>'));
+html=context.driveImportFields({folder:{name:'<img src=x>'},items:[{id:'file_demo_123',name:'<script>bad</script>',reason:''},{id:'file_other_123',name:'unsupported',reason:'<img src=x>'}],partial:true});
+check('Nazwy i powody pominięcia są escapowane',!html.includes('<img ')&&!html.includes('<script>')&&html.includes('&lt;img'));
+check('Nieobsługiwany plik jest wyłączony',html.includes('name="pick-file_other_123" disabled'));
+check('Niepełna lista ma ostrzeżenie',html.includes('Lista jest niepełna'));
+html=context.driveImportFields({folder:{id:'subfolder_demo_123',name:'Nested DEMO'},breadcrumbs:[{id:'root_demo_123',name:'Root DEMO'},{id:'subfolder_demo_123',name:'Nested DEMO'}],items:[{id:'child_demo_123',name:'<script>folder</script>',isFolder:true,reason:'Folder'}],partial:false});
+check('Folder ma przycisk otwarcia zamiast pola wyboru pliku',html.includes('data-action="drive-open-folder" data-key="child_demo_123"')&&!html.includes('name="pick-child_demo_123"'));
+check('Nawigacja pokazuje ścieżkę i powrót',html.includes('Root DEMO / Nested DEMO')&&html.includes('data-key="root_demo_123"'));
+check('Nazwy podfolderów są escapowane',!html.includes('<script>folder')&&html.includes('&lt;script&gt;folder'));
+check('Akcja otwierania folderu wywołuje dialog dla jego ID',source.includes("case 'drive-open-folder': await driveImportDialog(key); break;"));
+(async()=>{
+  context.driveConnectDialog();
+  check('Login ma widoczne potwierdzenie zakresu',dialog.fields.includes('name="confirmed"')&&dialog.fields.includes('całego Dysku'));
+  let rejected=false;try{await dialog.callback({});}catch{rejected=true;}
+  check('Brak zaznaczenia blokuje przygotowanie logowania',rejected);
+  await dialog.callback({confirmed:'on'});
+  check('Link logowania prowadzi tylko do Google',dialog.fields.includes('https://accounts.google.com/o/oauth2/v2/auth')&&dialog.fields.includes('rel="noopener noreferrer"'));
+  context.store.driveStatus=async()=>({authorized:false,pending:false,error:''});
+  let inactiveMessage='';try{await dialog.callback({});}catch(error){inactiveMessage=error.message;}
+  check('Nieaktywny odbiornik prowadzi do nowego logowania',inactiveMessage.includes('Sesja logowania jest nieaktywna')&&inactiveMessage.includes('nowego linku'));
+  context.store.driveStatus=async()=>({authorized:false,pending:false,error:'Sesja logowania Google wygasła. DEMO'});
+  inactiveMessage='';try{await dialog.callback({});}catch(error){inactiveMessage=error.message;}
+  check('Komunikat wygaśnięcia serwera trafia do formularza',inactiveMessage==='Sesja logowania Google wygasła. DEMO');
+  await context.driveImportDialog();
+  rejected=false;try{await dialog.callback({});}catch{rejected=true;}
+  check('Brak wybranych plików blokuje podgląd',rejected&&previewCalls===0);
+  await dialog.callback({'pick-file_demo_123':'on','kind-file_demo_123':'CV'});
+  check('Podgląd nie zapisuje plików',previewCalls===1&&commitCalls===0&&dialog.title==='Potwierdź import z Google Drive');
+  await dialog.callback({});
+  check('Zapis następuje po potwierdzeniu',commitCalls===1);
+  context.driveImportAllDialog();
+  check('Cały folder nie wymaga ręcznych zaznaczeń',!dialog.fields.includes('name="pick-')&&dialog.fields.includes('podfolderów'));
+  await dialog.callback({});
+  check('Cały folder przygotowuje podgląd bez zapisu',bulkCalls===1&&commitCalls===1&&dialog.title==='Potwierdź import całego Portfolio');
+  check('Nieodczytywalne media mają jawne oznaczenie',dialog.fields.includes('bez odczytu treści przez AI')&&dialog.fields.includes('DEMO.mp3'));
+  check('Ścieżki, pominięcia i ostrzeżenia całego folderu są escapowane',!dialog.fields.includes('<script>')&&!dialog.fields.includes('<img '));
+  await dialog.callback({});check('Jedno potwierdzenie zapisuje całą partię',commitCalls===2);
+  context.driveImportConfirm({wholeFolder:true,foldersScanned:3,filesFound:0,items:[],skipped:[],token:null,warnings:[]});
+  await dialog.callback({});check('Pusty lub powtórny import nie wysyła zapisu',commitCalls===2&&dialog.label==='Zamknij podsumowanie');
+  const calls=[],cache={revision:1,companies:[],offers:[],applications:[],materials:[]},updated={...cache,revision:2};
+  const responses={'/api/session':{csrf:'CSRF-DEMO'},'/api/state':cache,'/api/drive/status':{configured:false},'/api/drive/client':{configured:true},'/api/drive/commit':{ids:['DEMO'],state:updated}};
+  const adapter={window:{},fetch:async(p,o={})=>{calls.push({p,o});return {ok:true,json:async()=>responses[p]};},FormData,Intl,Date};
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT,'app/static/model.js'),'utf8'),adapter);
+  const store=await adapter.window.CareerModel.createStore();await store.driveStatus();await store.driveClient(new File(['DEMO'],'client.json'),false);
+  await store.driveFiles('nested folder/id?');
+  check('Folder w żądaniu API jest kodowany jako parametr',calls.at(-1).p==='/api/drive/files?folder=nested%20folder%2Fid%3F');
+  await store.drivePreviewAll();check('Import całości używa chronionego POST',calls.at(-1).p==='/api/drive/preview-all'&&calls.at(-1).o.method==='POST'&&calls.at(-1).o.headers['X-CSRF-Token']==='CSRF-DEMO');
+  const upload=calls.find(x=>x.p==='/api/drive/client');
+  check('Upload klienta używa multipart i CSRF bez JSON w frontendzie',upload.o.body instanceof FormData&&upload.o.headers['X-CSRF-Token']==='CSRF-DEMO'&&!upload.o.headers['Content-Type']);
+  check('Konfiguracja nie zmienia widoku danych biznesowych',store.state.revision===1);
+  await store.driveCommit({token:'DEMO',revision:1});
+  check('Potwierdzony import odświeża stan z backendu',store.state.revision===2&&JSON.parse(calls.at(-1).o.body).confirmed===true);
+  check('Nowe akcje są powiązane z formularzami',['drive-client','drive-connect','drive-folder','drive-import','drive-disconnect','drive-status'].every(x=>source.includes("case '"+x+"':")));
+  fs.writeFileSync(path.join(__dirname,'drive-ui-report.json'),JSON.stringify({result:'PASS',count:checks.length,checks,scope:'Rzeczywiste funkcje interfejsu i adapter; symulowane API. Bez sprawdzenia wizualnego i kliknięć w przeglądarce.'},null,2));
+  console.log('PASS:',checks.length,'kontroli komponentów i adaptera Drive.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1,0 +1,35 @@
+// Real view functions and request adapter; no browser or visual claims.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ROOT=path.resolve(__dirname,'../..'),source=fs.readFileSync(path.join(ROOT,'app/static/app.js'),'utf8'),checks=[];
+const check=(name,ok)=>{assert.ok(ok,name);checks.push(name);};
+const helperNames=['esc','button','nav','heading','options','stamp'];
+const helpers=source.split('\n').filter(line=>helperNames.some(name=>new RegExp('^\\s*const '+name+' =').test(line))).join('\n');
+let saved,dialog,created=0,prepared;
+const offer={id:'offer-demo',title:'<script>Oferta DEMO</script>',url:'https://example.org',description:'Wymagania DEMO'},base={id:'base-demo',kind:'CV',fileKey:'base.txt',title:'CV DEMO',version:'1'},output={id:'pdf-demo',fileKey:'output.pdf'};
+const state={offers:[offer],applications:[{id:'app-demo',offerId:offer.id}],materials:[base,{id:'old-ai',kind:'CV',title:'CV do oferty · DEMO',fileKey:'old.pdf',version:'1'}]};
+const ctx={aiStatus:{available:true,model:'demo-local'},aiBusy:false,aiError:'',aiQuery:'',cvBase:'',cvExtras:[],selected:'app-demo',selectedOffer:offer.id,aiPreview:null,screen:'assistant',currentApp:()=>state.applications.find(row=>row.id===ctx.selected),document:{getElementById:id=>id==='ai-draft'?{value:'Treść po poprawce użytkownika <script>DEMO</script>'}:{value:''}},main:{querySelector:()=>null,focus:()=>{}},render:()=>{},announce:()=>{},closeDialog:()=>{},showDialog:(title,fields,label,callback)=>{dialog={title,fields,label,callback};},store:{state,find:(table,id)=>table==='offers'?offer:table==='materials'?(id==='pdf-demo'?output:state.materials.find(row=>row.id===id)):null,offer:()=>offer,company:()=>({name:'Firma DEMO'}),applicationLabel:()=>'<firma>',createApplication:async()=>{created++;state.applications.push({id:'new-app',offerId:offer.id});return {id:'new-app'};},aiPrepare:async(...args)=>{prepared=args;return {mode:'cv',applicationId:ctx.selected,fullCV:true,draft:'JAN DEMO',control:[],inventory:[],operations:[],evidence:[],createdAt:'2026-10-14T12:00:00Z',model:'demo-local',token:'DEMO',revision:1};},aiCommit:async(p,draft)=>{saved={p,draft};return ['pdf-demo'];}}};
+vm.createContext(ctx);
+const viewStart=source.indexOf('  function assistantView()'),viewEnd=source.indexOf('  function materialReviewView',viewStart);
+const previewStart=source.indexOf('  function aiPreviewView()'),previewEnd=source.indexOf('  function driveGuide()',previewStart);
+vm.runInContext(helpers+'\n'+source.slice(viewStart,viewEnd)+'\n'+source.slice(previewStart,previewEnd),ctx);
+(async()=>{
+  let html=ctx.assistantView();check('Jeden ekran bez sześciu zakładek',!html.includes('data-step')&&html.includes('Przygotuj CV')&&html.includes('Dodatkowe narzędzia'));
+  check('Oferta i CV bazowe mają osobne pola',html.includes('id="ai-context"')&&html.includes('id="cv-base"'));
+  check('Wcześniejszy wynik AI nie jest domyślnym źródłem CV',!html.includes('old-ai')&&ctx.cvBase===base.id);
+  check('Tytuły ofert są escapowane',!html.includes('<script>'));
+  await ctx.runAI('cv');check('Generator otrzymuje ID CV bazowego i wybór portfolio',prepared[3].baseMaterialId===base.id&&prepared[3].materialIds.length===0);
+  html=ctx.aiPreviewView();check('Wynik jest edytowalnym polem tekstowym',html.includes('<textarea')&&html.includes('maxlength="24000"')&&!html.includes(' readonly'));
+  ctx.saveAI();check('Potwierdzenie pokazuje poprawiony tekst bez wykonania kodu',dialog.fields.includes('Treść po poprawce')&&!dialog.fields.includes('<script>'));
+  check('Otwarcie potwierdzenia nie zapisuje dokumentów',saved===undefined);
+  await dialog.callback();check('Zapis przekazuje treść użytkownika',saved.draft==='Treść po poprawce użytkownika <script>DEMO</script>');
+  html=ctx.aiPreviewView();check('Zapisany wynik daje bezpośrednie pobranie PDF',html.includes('/api/materials/pdf-demo/download')&&html.includes('Pobierz PDF'));
+  check('Zapisana treść jest tylko do odczytu',html.includes(' readonly'));
+  ctx.selected='';await ctx.runAI('cv');check('Nowa oferta rozpoczyna przygotowanie aplikacji',created===1&&prepared[1]==='new-app');
+  const calls=[],adapter={window:{},fetch:async(p,o={})=>{calls.push({p,o});return {ok:true,json:async()=>p==='/api/session'?{csrf:'CSRF'}:p==='/api/state'?{revision:1}:p==='/api/ai/commit'?{ids:['pdf-demo'],state:{revision:2}}:{token:'DEMO',revision:1}};},FormData,Intl,Date};
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT,'app/static/model.js'),'utf8'),adapter);const store=await adapter.window.CareerModel.createStore();
+  const p=await store.aiPrepare('cv','app-demo','',{baseMaterialId:'base-demo',materialIds:['portfolio-demo']});
+  check('Adapter przekazuje wybór źródeł',JSON.parse(calls.at(-1).o.body).baseMaterialId==='base-demo');
+  await store.aiCommit(p,'CV po edycji');const body=JSON.parse(calls.at(-1).o.body);
+  check('Adapter przekazuje edycję z potwierdzeniem i CSRF',body.draft==='CV po edycji'&&body.confirmed===true&&calls.at(-1).o.headers['X-CSRF-Token']==='CSRF');
+  fs.writeFileSync(path.join(__dirname,'simple-cv-ui-report.json'),JSON.stringify({result:'PASS',count:checks.length,checks,scope:'Rzeczywiste funkcje widoku i adapter; bez renderu przeglądarki.'},null,2));console.log('PASS:',checks.length,'kontroli interfejsu pełnego CV.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

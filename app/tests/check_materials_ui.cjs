@@ -1,0 +1,24 @@
+// Sprawdzenie HTML komponentu na danych DEMO, bez sterowania przeglądarką i oceny wyglądu.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ROOT=path.resolve(__dirname,'../..'),source=fs.readFileSync(path.join(ROOT,'app/static/app.js'),'utf8');
+const report=JSON.parse(fs.readFileSync(path.join(__dirname,'materials-http-report.json'),'utf8'));
+const p=JSON.parse(fs.readFileSync(path.join(report.directory,'preview-demo.json'),'utf8'));
+const escapeLine=source.split('\n').find(line=>line.trim().startsWith('const esc ='));
+const start=source.indexOf('  function materialReviewView(p) {'),end=source.indexOf('  function aiPreviewView()',start);
+assert(start>=0 && end>start && escapeLine);
+const render=preview=>vm.runInNewContext(escapeLine+'\n'+source.slice(start,end)+'\nmaterialReviewView(p)',{p:preview});
+const checks=[];
+const check=(name,ok)=>{assert.ok(ok,name);checks.push(name);};
+let html=render(p);
+check('Wynik zawiera wszystkie materiały i brak ogłoszenia',p.inventory.every(row=>html.includes(row.title)) && html.includes('Brak treści ogłoszenia'));
+check('Wynik zawiera liczniki zakresu analizy',html.includes('odczytanych fragmentów'));
+p.inventory[0].title='<script>evil()</script>';
+p.findings=[{source:{materialId:'demo',title:'<img src=x>',version:'1',locator:'Strona 1',id:'M1-F1',text:'<img src=x onerror=evil()>',url:'https://example.org/'},requirements:[],comment:'<script>evil()</script>',recommended:true}];
+html=render(p);
+check('Treść źródeł i tytuły są escapowane',!html.includes('<script>') && !html.includes('<img ') && html.includes('&lt;img'));
+check('Komentarz jest oznaczony jako wniosek AI',html.includes('Wniosek AI — do oceny'));
+check('Nie ma przycisku samoczynnie zmieniającego profil',!html.includes('data-action="edit-profile"'));
+check('Nowy tryb jest dostępny z przycisku',source.includes("runButton('Przejrzyj wszystkie materiały','materials')"));
+check('Polecenie użytkownika trafia do nowego trybu',source.includes("mode==='command'||mode==='search'||mode==='materials'?aiQuery:''"));
+fs.writeFileSync(path.join(__dirname,'materials-ui-report.json'),JSON.stringify({result:'PASS',count:checks.length,checks,scope:'Renderowanie ciągu HTML w Node; bez kontroli wizualnej i kliknięć w przeglądarce.'},null,2));
+console.log('PASS:',checks.length,'kontroli komponentu przeglądu materiałów.');

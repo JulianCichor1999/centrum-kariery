@@ -1,0 +1,31 @@
+// Actual UI functions; no browser automation or visual claims.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ROOT=path.resolve(__dirname,'../..'),source=fs.readFileSync(path.join(ROOT,'app/static/app.js'),'utf8');
+const helpers=source.split('\n').filter(x=>/^\s*const (esc|textarea) =/.test(x)).join('\n');
+const start=source.indexOf('  async function runAI(mode) {'),end=source.indexOf('  function saveAI()',start);
+let dialog,previews=0,commits=0,analyses=0;const checks=[];
+const check=(name,ok)=>{assert.ok(ok,name);checks.push(name);};
+const offer={id:'offer-demo',url:'https://example.org/job',description:''};
+const ctx={aiBusy:false,aiQuery:'',aiError:'',aiPreview:null,screen:'assistant',document:{getElementById:()=>({value:'',textContent:'',hidden:true})},main:{querySelector:()=>null,focus:()=>{}},render:()=>{},announce:()=>{},closeDialog:()=>{},stamp:x=>x,currentApp:()=>({id:'application-demo'}),offerDialog:()=>{},showDialog:(title,fields,label,callback)=>{dialog={title,fields,label,callback};},store:{offer:()=>offer,offerTextPreview:async()=>{previews++;return {title:'<script>title</script>',text:'<img src=x onerror=bad()>',sourceUrl:'https://example.org/<script>',method:'Public DEMO',fetchedAt:'2026-10-13T15:00:00Z',token:'TOKEN-DEMO',revision:1};},offerTextCommit:async(plan,text)=>{commits++;offer.description=text;},aiPrepare:async()=>{analyses++;return {mode:'analysis',matches:[]};}}};
+vm.createContext(ctx);vm.runInContext(helpers+'\n'+source.slice(start,end),ctx);
+(async()=>{
+  await ctx.runAI('analysis');
+  check('Pusty opis z linkiem otwiera podgląd przed analizą',previews===1&&analyses===0&&commits===0&&dialog.title==='Treść oferty z linku');
+  check('Podgląd umożliwia edycję treści',dialog.fields.includes('name="description"'));
+  check('Tytuł, źródło i tekst oferty są escapowane',!dialog.fields.includes('<script>')&&!dialog.fields.includes('<img '));
+  await dialog.callback({description:'Sprawdzona treść DEMO.'});
+  check('Potwierdzenie zapisuje treść i dopiero wtedy uruchamia analizę',commits===1&&analyses===1&&offer.description==='Sprawdzona treść DEMO.');
+  await ctx.runAI('analysis');check('Zapisana treść nie jest pobierana ponownie automatycznie',previews===1&&analyses===2);
+  offer.description='';await ctx.runAI('materials');check('Przegląd materiałów pozostaje możliwy bez treści oferty',previews===1&&analyses===3);
+  check('Oferty i dopasowanie mają przycisk pobrania',source.split("button('Pobierz treść z linku','offer-read-link'").length===3);
+  const calls=[],base={revision:1},updated={revision:2};
+  const responses={'/api/session':{csrf:'CSRF-DEMO'},'/api/state':base,'/api/offers/offer-demo/read-link':{token:'TOKEN-DEMO',revision:1,text:'DEMO'},'/api/offers/read-link/commit':{state:updated}};
+  const adapter={window:{},fetch:async(p,o={})=>{calls.push({p,o});return {ok:true,json:async()=>responses[p]};},FormData,Intl,Date};
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT,'app/static/model.js'),'utf8'),adapter);const store=await adapter.window.CareerModel.createStore();const plan=await store.offerTextPreview('offer-demo');
+  check('Pobranie wymaga chronionego POST',calls.at(-1).o.method==='POST'&&calls.at(-1).o.headers['X-CSRF-Token']==='CSRF-DEMO');
+  check('Podgląd nie zmienia cache danych',store.state.revision===1);
+  await store.offerTextCommit(plan,'Treść po korekcie.');const body=JSON.parse(calls.at(-1).o.body);
+  check('Zapis przesyła świadome potwierdzenie i poprawiony tekst',body.confirmed===true&&body.text==='Treść po korekcie.'&&store.state.revision===2);
+  fs.writeFileSync(path.join(__dirname,'offer-import-ui-report.json'),JSON.stringify({result:'PASS',count:checks.length,checks,scope:'Rzeczywiste funkcje interfejsu i adapter; API symulowane, bez oceny wizualnej.'},null,2));
+  console.log('PASS:',checks.length,'kontroli interfejsu importu oferty.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
